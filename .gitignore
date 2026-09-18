@@ -14,3 +14,5 @@ htmlcov/
 tmp/
 .DS_Store
 
+
+.vercel
