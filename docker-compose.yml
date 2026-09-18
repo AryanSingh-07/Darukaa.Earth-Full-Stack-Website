@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-darukaa}
+      POSTGRES_USER: ${POSTGRES_USER:-darukaa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-darukaa_local_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-darukaa} -d ${POSTGRES_DB:-darukaa}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-darukaa}:${POSTGRES_PASSWORD:-darukaa_local_password}@db:5432/${POSTGRES_DB:-darukaa}
+      JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
