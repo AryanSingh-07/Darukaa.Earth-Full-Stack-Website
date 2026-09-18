@@ -1,8 +1,14 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import MapboxDraw from "@mapbox/mapbox-gl-draw";
 import area from "@turf/area";
-import mapboxgl, { type Map as MapboxMap } from "mapbox-gl";
-import { MapPin, MousePointer2, X } from "lucide-react";
+import mapboxgl, { type GeoJSONSource, type Map as MapboxMap } from "mapbox-gl";
+import {
+  Check,
+  MapPin,
+  MousePointer2,
+  RotateCcw,
+  Undo2,
+  X,
+} from "lucide-react";
 import type { Project } from "../types";
 
 const drawStyle: mapboxgl.Style = {
@@ -25,6 +31,29 @@ interface Props {
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
 }
 
+type Coordinate = [number, number];
+
+function draftGeoJson(points: Coordinate[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = points.map((coordinates, index) => ({
+    type: "Feature",
+    properties: { index },
+    geometry: { type: "Point", coordinates },
+  }));
+
+  if (points.length >= 2) {
+    features.unshift({
+      type: "Feature",
+      properties: {},
+      geometry:
+        points.length >= 3
+          ? { type: "Polygon", coordinates: [[...points, points[0]]] }
+          : { type: "LineString", coordinates: points },
+    });
+  }
+
+  return { type: "FeatureCollection", features };
+}
+
 export default function SiteModal({
   projects,
   initialProjectId,
@@ -33,7 +62,10 @@ export default function SiteModal({
 }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapboxMap | null>(null);
+  const pointsRef = useRef<Coordinate[]>([]);
+  const finishedRef = useRef(false);
   const [geometry, setGeometry] = useState<GeoJSON.Polygon | null>(null);
+  const [pointCount, setPointCount] = useState(0);
   const [areaHectares, setAreaHectares] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -46,36 +78,105 @@ export default function SiteModal({
       center: [78.8, 21.5],
       zoom: 4.1,
     });
-    const draw = new MapboxDraw({
-      displayControlsDefault: false,
-      controls: { polygon: true, trash: true },
-      defaultMode: "draw_polygon",
-    });
     map.addControl(
       new mapboxgl.NavigationControl({ showCompass: false }),
       "top-left",
     );
-    map.addControl(draw, "top-right");
-    const updatePolygon = () => {
-      const collection = draw.getAll();
-      const feature = collection.features[0];
-      if (feature?.geometry.type === "Polygon") {
-        setGeometry(feature.geometry);
-        setAreaHectares(Math.round((area(feature) / 10_000) * 10) / 10);
-      } else {
-        setGeometry(null);
-        setAreaHectares(0);
-      }
-    };
-    map.on("draw.create", updatePolygon);
-    map.on("draw.update", updatePolygon);
-    map.on("draw.delete", updatePolygon);
+
+    map.on("load", () => {
+      map.addSource("site-boundary-draft", {
+        type: "geojson",
+        data: draftGeoJson([]),
+      });
+      map.addLayer({
+        id: "site-boundary-fill",
+        type: "fill",
+        source: "site-boundary-draft",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": "#2f855a", "fill-opacity": 0.22 },
+      });
+      map.addLayer({
+        id: "site-boundary-line",
+        type: "line",
+        source: "site-boundary-draft",
+        filter: [
+          "in",
+          ["geometry-type"],
+          ["literal", ["LineString", "Polygon"]],
+        ],
+        paint: {
+          "line-color": "#145b3f",
+          "line-width": 3,
+          "line-dasharray": [1.5, 1],
+        },
+      });
+      map.addLayer({
+        id: "site-boundary-points",
+        type: "circle",
+        source: "site-boundary-draft",
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#b9ea68",
+          "circle-stroke-color": "#145b3f",
+          "circle-stroke-width": 2,
+        },
+      });
+    });
+
+    map.on("click", (event) => {
+      if (finishedRef.current) return;
+      pointsRef.current = [
+        ...pointsRef.current,
+        [event.lngLat.lng, event.lngLat.lat],
+      ];
+      setPointCount(pointsRef.current.length);
+      setError("");
+      const source = map.getSource("site-boundary-draft") as
+        GeoJSONSource | undefined;
+      source?.setData(draftGeoJson(pointsRef.current));
+    });
     mapRef.current = map;
     return () => {
       map.remove();
       mapRef.current = null;
     };
   }, []);
+
+  const updateDraft = (points: Coordinate[]) => {
+    pointsRef.current = points;
+    finishedRef.current = false;
+    setPointCount(points.length);
+    setGeometry(null);
+    setAreaHectares(0);
+    const source = mapRef.current?.getSource("site-boundary-draft") as
+      GeoJSONSource | undefined;
+    source?.setData(draftGeoJson(points));
+  };
+
+  const finishBoundary = () => {
+    if (pointsRef.current.length < 3) {
+      setError("Add at least three boundary points before finishing.");
+      return;
+    }
+    const polygon: GeoJSON.Polygon = {
+      type: "Polygon",
+      coordinates: [[...pointsRef.current, pointsRef.current[0]]],
+    };
+    const squareMetres = area({
+      type: "Feature",
+      properties: {},
+      geometry: polygon,
+    });
+    if (squareMetres === 0) {
+      setError("Spread the points apart to create a visible boundary area.");
+      return;
+    }
+    finishedRef.current = true;
+    setGeometry(polygon);
+    setAreaHectares(Math.round((squareMetres / 10_000) * 10) / 10);
+    setError("");
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -159,12 +260,12 @@ export default function SiteModal({
               {geometry ? <MapPin size={18} /> : <MousePointer2 size={18} />}
               <div>
                 <strong>
-                  {geometry ? "Boundary captured" : "Draw a polygon"}
+                  {geometry ? "Boundary captured" : "Mark the boundary"}
                 </strong>
                 <span>
                   {geometry
                     ? `Calculated area: ${areaHectares.toLocaleString()} ha`
-                    : "Click points around the site, then close the shape."}
+                    : `${pointCount} point${pointCount === 1 ? "" : "s"} added · minimum 3`}
                 </span>
               </div>
             </div>
@@ -187,8 +288,34 @@ export default function SiteModal({
           </form>
           <div className="draw-map-wrap">
             <div ref={mapContainer} className="draw-map" />
+            <div className="draw-tools" aria-label="Boundary tools">
+              <button
+                type="button"
+                onClick={() => updateDraft(pointsRef.current.slice(0, -1))}
+                disabled={!pointCount || Boolean(geometry)}
+              >
+                <Undo2 size={15} /> Undo
+              </button>
+              <button
+                type="button"
+                onClick={() => updateDraft([])}
+                disabled={!pointCount}
+              >
+                <RotateCcw size={15} /> Reset
+              </button>
+              <button
+                type="button"
+                className="draw-tools__finish"
+                onClick={finishBoundary}
+                disabled={pointCount < 3 || Boolean(geometry)}
+              >
+                <Check size={15} /> Finish boundary
+              </button>
+            </div>
             <div className="map-instruction">
-              Use the polygon tool to define the site boundary
+              {geometry
+                ? "Boundary ready to save"
+                : "Click the map to add points, then finish the boundary"}
             </div>
           </div>
         </div>
