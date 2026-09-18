@@ -203,7 +203,7 @@ function OverviewView({
   setProjectFilter: (value: string) => void;
   openSite: (id: string) => void;
   openProjects: () => void;
-  addSite: () => void;
+  addSite: (projectId: string) => void;
 }) {
   const visibleProjects =
     projectFilter === "all"
@@ -313,7 +313,7 @@ function OverviewView({
                   (item) => item.project_id === project.id,
                 );
                 if (site) openSite(site.id);
-                else addSite();
+                else addSite(project.id);
               }}
             />
           ))}
@@ -329,12 +329,14 @@ function ProjectsView({
   query,
   onOpenSite,
   onAddProject,
+  onAddSite,
 }: {
   projects: Project[];
   sites: Site[];
   query: string;
   onOpenSite: (id: string) => void;
   onAddProject: () => void;
+  onAddSite: (projectId: string) => void;
 }) {
   const filtered = projects.filter((project) =>
     [project.name, project.location_label, project.focus]
@@ -370,6 +372,7 @@ function ProjectsView({
             onOpen={() => {
               const site = sites.find((item) => item.project_id === project.id);
               if (site) onOpenSite(site.id);
+              else onAddSite(project.id);
             }}
           />
         ))}
@@ -735,6 +738,7 @@ export default function Dashboard({ user, onLogout }: Props) {
   const [searchTerm, setSearchTerm] = useState("");
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [showSiteModal, setShowSiteModal] = useState(false);
+  const [siteProjectId, setSiteProjectId] = useState<string>();
   const [selectedSite, setSelectedSite] = useState<SiteAnalytics | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -792,6 +796,11 @@ export default function Dashboard({ user, onLogout }: Props) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const openSiteCreator = useCallback((projectId?: string) => {
+    setSiteProjectId(projectId);
+    setShowSiteModal(true);
+  }, []);
+
   const actionButtons = useMemo(() => {
     if (activeSection === "projects") {
       return (
@@ -807,7 +816,7 @@ export default function Dashboard({ user, onLogout }: Props) {
       return (
         <button
           className="button button--primary"
-          onClick={() => setShowSiteModal(true)}
+          onClick={() => openSiteCreator()}
           disabled={!data.projects.length}
         >
           <MapPinned size={17} /> Add site
@@ -819,7 +828,7 @@ export default function Dashboard({ user, onLogout }: Props) {
       <>
         <button
           className="button button--secondary"
-          onClick={() => setShowSiteModal(true)}
+          onClick={() => openSiteCreator()}
           disabled={!data.projects.length}
         >
           <MapPinned size={17} /> Add site
@@ -832,7 +841,7 @@ export default function Dashboard({ user, onLogout }: Props) {
         </button>
       </>
     );
-  }, [activeSection, data.projects.length]);
+  }, [activeSection, data.projects.length, openSiteCreator]);
 
   const currentHeading = headings[activeSection];
 
@@ -996,7 +1005,7 @@ export default function Dashboard({ user, onLogout }: Props) {
                   setProjectFilter={setProjectFilter}
                   openSite={(id) => void openSite(id)}
                   openProjects={() => navigate("projects")}
-                  addSite={() => setShowSiteModal(true)}
+                  addSite={openSiteCreator}
                 />
               )}
               {activeSection === "projects" && (
@@ -1006,6 +1015,7 @@ export default function Dashboard({ user, onLogout }: Props) {
                   query={searchTerm}
                   onOpenSite={(id) => void openSite(id)}
                   onAddProject={() => setShowProjectModal(true)}
+                  onAddSite={openSiteCreator}
                 />
               )}
               {activeSection === "sites" && (
@@ -1013,7 +1023,7 @@ export default function Dashboard({ user, onLogout }: Props) {
                   sites={data.sites}
                   query={searchTerm}
                   onOpen={(id) => void openSite(id)}
-                  onAdd={() => setShowSiteModal(true)}
+                  onAdd={() => openSiteCreator()}
                 />
               )}
               {activeSection === "impact" && (
@@ -1057,8 +1067,14 @@ export default function Dashboard({ user, onLogout }: Props) {
       {showSiteModal && (
         <SiteModal
           projects={data.projects}
-          initialProjectId={projectFilter === "all" ? undefined : projectFilter}
-          onClose={() => setShowSiteModal(false)}
+          initialProjectId={
+            siteProjectId ??
+            (projectFilter === "all" ? undefined : projectFilter)
+          }
+          onClose={() => {
+            setShowSiteModal(false);
+            setSiteProjectId(undefined);
+          }}
           onSubmit={async (form) => {
             await api.createSite(form);
             await loadDashboard();
